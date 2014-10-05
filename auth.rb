@@ -1,8 +1,9 @@
 require 'sinatra'
-require 'json_store'
+require 'lazy_records'
 require 'totally_lazy'
+require 'oj'
 
-db = JsonStore.new('sessions.json')
+records = MemoryRecords.new
 
 get '/' do
   content_type :json
@@ -12,9 +13,11 @@ end
 post '/create' do
   content_type :json
   begin
-  db.pull
   user = Oj.load(request.body.read.to_s)
   halt 500,Oj.dump({error: 'you must supply the correct parameters'}) unless user.keys.include?('nick')
+
+  if records.filter(where(name: user['nick']))
+
   if option(db.get(user['nick'])).is_none?
     session = Any.string(15)
     db.set(user['nick'], session)
@@ -41,3 +44,6 @@ get '/remove' do
   db.write ; db.pull
   Oj.dump({status:option(db.get(params['nick'])).is_none?})
 end
+
+
+
