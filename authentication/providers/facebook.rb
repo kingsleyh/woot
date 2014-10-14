@@ -1,10 +1,11 @@
 require 'totally_lazy'
-require 'Oj'
+require 'lazy_records'
+require 'adapters/sqlite3'
 
 class Facebook
  
   def self.info(data)
-    Oj.dump({provider: option(data.provider).get_or_else(''),
+    Record.new({provider: option(data.provider).get_or_else(''),
     uid: option(data.uid).get_or_else(''),
     email: option(data.info.email).get_or_else(''),
     full_name: option(data.info.name).get_or_else(''),
@@ -22,6 +23,6 @@ class Facebook
     locale: option(data.extra.raw_info.locale).get_or_else(''),
     updated_time: option(data.extra.raw_info.updated_time).get_or_else('')})
   end
-  
-  
+
+
 end

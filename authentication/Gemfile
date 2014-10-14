@@ -9,6 +9,8 @@ gem 'omniauth-facebook'
 gem 'omniauth-twitter'
 gem 'standalone_migrations'
 gem 'sqlite3'
+gem 'bcrypt-ruby'
+gem 'after_do'
 
 
 gem 'activerecord'
