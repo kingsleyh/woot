@@ -65,7 +65,7 @@ class BaseModel
   end
 
   def is_valid?
-    @errors.empty?
+    errors.empty?
   end
 
   protected
@@ -109,5 +109,6 @@ class User < BaseModel
 end
 
 
-# records = SqlVirtualRecords.new(DbConnection.instance.connection)
+records = SqlVirtualRecords.new(DbConnection.instance.connection)
 # p records.sql_query("select * from users").entries
+# p records.sql_query("select * from users where email = 'test@test.com'").entries

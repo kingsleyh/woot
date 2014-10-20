@@ -47,11 +47,11 @@ class AuthenticationApp < Sinatra::Application
     email = params[:email]
     password = params[:password]
     password_confirmation = params[:password_confirmation]
-    user = User.new(:email,email,:password,password,:password_confirmation,password_confirmation)
+    user = User.new(:email, email, :password, password, :password_confirmation, password_confirmation)
     if user.save
-      halt 201, j(status:'success')
+      halt 201, j(status: 'success')
     else
-      j(errors:user.errors)
+      j(errors: user.errors)
     end
   end
 
@@ -59,11 +59,40 @@ class AuthenticationApp < Sinatra::Application
     email = params[:email]
     password = params[:password]
 
-    user = User.find(where(email:equals(email)))
-    if user.is_some? &&  user.get.head.password_hash == BCrypt::Engine.hash_secret(password, user.get.head.password_salt)
-     halt 200, j(user.get.head.get_hash)
+    user = User.find(where(email: equals(email)))
+    if user.is_some? && user.get.head.password_hash == BCrypt::Engine.hash_secret(password, user.get.head.password_salt)
+      session[:user_id] = user.get.head.id
+      halt 200, j(user.get.head.get_hash)
     else
-      halt 401, j(status:'unauthorised',message:'Invalid email or password')
+      halt 401, j(status: 'unauthorised', message: 'Invalid email or password')
+    end
+  end
+
+  get '/whoami' do
+    user = User.find(where(id: equals(session[:user_id])))
+    if user.is_some?
+      halt 200, j(user.get.head.get_hash)
+    else
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    end
+  end
+
+  get '/signout' do
+    user = User.find(where(id: equals(session[:user_id])))
+    if user.is_some?
+      session[:user_id] = nil
+      halt 200, j(status: 'logged out')
+    else
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    end
+  end
+
+  get '/destroy' do
+    user = User.find(where(id: equals(session[:user_id])))
+    if user.is_some?
+      halt 200, j(status: 'not implemented yet!')
+    else
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
     end
   end
 
