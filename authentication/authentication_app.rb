@@ -4,7 +4,7 @@ require 'sinatra/base'
 require 'oj'
 require_relative 'providers/facebook'
 require_relative 'providers/twitter'
-require_relative '../model/user'
+require_relative 'repository/users'
 
 
 class AuthenticationApp < Sinatra::Application
@@ -44,33 +44,30 @@ class AuthenticationApp < Sinatra::Application
   end
 
   post '/signup' do
-    email = params[:email]
-    password = params[:password]
-    password_confirmation = params[:password_confirmation]
-    user = User.new(:email, email, :password, password, :password_confirmation, password_confirmation)
-    if user.save
-      halt 201, j(status: 'success')
-    else
-      j(errors: user.errors)
-    end
+    user = Users.create(params[:email], params[:password], params[:password_confirmation])
+    user.is_valid? ? halt(201, j(status: 'success')) : j(errors: user.errors)
   end
 
   post '/signin' do
-    email = params[:email]
-    password = params[:password]
-
-    user = User.find(where(email: equals(email)))
-    if user.is_some? && user.get.head.password_hash == BCrypt::Engine.hash_secret(password, user.get.head.password_salt)
-      session[:user_id] = user.get.head.id
-      halt 200, j(user.get.head.get_hash)
+    if already_logged_in?
+      halt(401, j(status: 'error', message:'Already logged in'))
     else
-      halt 401, j(status: 'unauthorised', message: 'Invalid email or password')
+      email = params[:email]
+      password = params[:password]
+
+      user = Users.find(where(email: equals(email)))
+      if user.is_some? && user.get.head.password_hash == BCrypt::Engine.hash_secret(password, user.get.head.password_salt)
+        session[:user_id] = user.get.head.id
+        halt 200, j(user.get.head.get_hash)
+      else
+        halt 401, j(status: 'unauthorised', message: 'Invalid email or password')
+      end
     end
   end
 
   get '/whoami' do
-    user = User.find(where(id: equals(session[:user_id])))
-    if user.is_some?
+    user = Users.find(where(id: equals(session[:user_id])))
+    if already_logged_in? && user.is_some?
       halt 200, j(user.get.head.get_hash)
     else
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
@@ -78,8 +75,8 @@ class AuthenticationApp < Sinatra::Application
   end
 
   get '/signout' do
-    user = User.find(where(id: equals(session[:user_id])))
-    if user.is_some?
+    user = Users.find(where(id: equals(session[:user_id])))
+    if already_logged_in? && user.is_some?
       session[:user_id] = nil
       halt 200, j(status: 'logged out')
     else
@@ -88,7 +85,7 @@ class AuthenticationApp < Sinatra::Application
   end
 
   get '/destroy' do
-    user = User.find(where(id: equals(session[:user_id])))
+    user = Users.find(where(id: equals(session[:user_id])))
     if user.is_some?
       halt 200, j(status: 'not implemented yet!')
     else
@@ -105,6 +102,10 @@ class AuthenticationApp < Sinatra::Application
   end
 
   private
+
+  def already_logged_in?
+    !session[:user_id].nil?
+  end
 
   def j(v)
     Oj.dump(v)
