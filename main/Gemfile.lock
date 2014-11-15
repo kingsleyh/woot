@@ -40,10 +40,9 @@ GEM
     journey (1.0.4)
     json (1.8.1)
     jwt (1.0.0)
-    lazy_records (0.0.2)
+    lazy_records (0.0.4)
       encrypted_strings
       lock_method
-      mysql2
       totally_lazy
     lock_method (0.5.5)
       activesupport
@@ -51,7 +50,6 @@ GEM
     multi_json (1.10.1)
     multi_xml (0.5.5)
     multipart-post (2.0.0)
-    mysql2 (0.3.16)
     oauth (0.4.7)
     oauth2 (1.0.0)
       faraday (>= 0.8, < 0.10)
@@ -123,7 +121,7 @@ GEM
       rake (~> 10.0)
     thor (0.19.1)
     tilt (1.4.1)
-    totally_lazy (0.0.6)
+    totally_lazy (0.0.7)
     tzinfo (0.3.41)
 
 PLATFORMS
