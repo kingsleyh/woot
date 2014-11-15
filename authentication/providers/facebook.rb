@@ -5,7 +5,7 @@ require 'adapters/sqlite3'
 class Facebook
  
   def self.info(data)
-    Record.new({provider: option(data.provider).get_or_else(''),
+    {provider: option(data.provider).get_or_else(''),
     uid: option(data.uid).get_or_else(''),
     email: option(data.info.email).get_or_else(''),
     full_name: option(data.info.name).get_or_else(''),
@@ -21,7 +21,7 @@ class Facebook
     gender: option(data.extra.raw_info.gender).get_or_else(''),
     timezone: option(data.extra.raw_info.timezone).get_or_else(''),
     locale: option(data.extra.raw_info.locale).get_or_else(''),
-    updated_time: option(data.extra.raw_info.updated_time).get_or_else('')})
+    updated_time: option(data.extra.raw_info.updated_time).get_or_else('')}
   end
 
 

@@ -9,7 +9,7 @@ class Repository
   attr_reader :records
 
   def initialize
-    @records = SqlRecords.new(Sqlite3.new(File.dirname(__FILE__) + '/../../db/development.sqlite3',true))
+    @records = SqlRecords.new(Sqlite3.new(File.dirname(__FILE__) + '/../../database/db/development.sqlite3',true))
   end
 
 end

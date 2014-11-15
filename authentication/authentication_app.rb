@@ -5,7 +5,7 @@ require 'oj'
 require_relative 'providers/facebook'
 require_relative 'providers/twitter'
 require_relative 'repository/users'
-
+require_relative 'repository/identities'
 
 class AuthenticationApp < Sinatra::Application
 
@@ -43,6 +43,17 @@ class AuthenticationApp < Sinatra::Application
     html
   end
 
+  get '/update' do
+    <<-html
+     <form method="post" action="/auth/update">
+     email:<input type="text" name="email" id="email">
+     password:<input type="password" name="password" id="password">
+     password_confirmation:<input type="password" name="password_confirmation" id="password_confirmation">
+    <input type="submit" value="Submit">
+    </form>
+    html
+  end
+
   post '/signup' do
     user = Users.create(params[:email], params[:password], params[:password_confirmation])
     user.is_valid? ? halt(201, j(status: 'success')) : j(errors: user.errors)
@@ -50,7 +61,7 @@ class AuthenticationApp < Sinatra::Application
 
   post '/signin' do
     if already_logged_in?
-      halt(401, j(status: 'error', message:'Already logged in'))
+      halt(401, j(status: 'error', message: 'Already logged in'))
     else
       email = params[:email]
       password = params[:password]
@@ -67,7 +78,7 @@ class AuthenticationApp < Sinatra::Application
 
   get '/whoami' do
     user = Users.find(where(id: equals(session[:user_id])))
-    if already_logged_in? && user.is_some?
+    if user.is_some?
       halt 200, j(user.get.head.get_hash)
     else
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
@@ -76,9 +87,20 @@ class AuthenticationApp < Sinatra::Application
 
   get '/signout' do
     user = Users.find(where(id: equals(session[:user_id])))
-    if already_logged_in? && user.is_some?
+    if user.is_some?
       session[:user_id] = nil
       halt 200, j(status: 'logged out')
+    else
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    end
+  end
+
+  post '/update' do
+    user = Users.find(where(id: equals(session[:user_id])))
+    if user.is_some?
+       p option(params[:email])
+      u = Users.update(user.get.head.id,option(params[:email]),option(params[:password]),option(params[:password_confirmation]))
+      u.is_valid? ? halt(201, j(status: 'success')) : j(errors: u.errors)
     else
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
     end
@@ -94,7 +116,35 @@ class AuthenticationApp < Sinatra::Application
   end
 
   get '/auth/facebook/callback' do
-    Facebook.info(request.env['omniauth.auth'])
+    if already_logged_in?   # TODO - remove this and if already logged in then just add facebook to the identities for this user but dont try to login again with it
+      halt(401, j(status: 'error', message: 'Already logged in'))
+    else
+      info = Facebook.info(request.env['omniauth.auth'])
+      provider = info[:provider]
+      uid = info[:uid]
+      identity = Identities.find(where(provider: equals(provider), uid: equals(uid)))
+      if identity.is_some?
+        # login with existing user
+        user = Users.find(where(id: equals(identity.get.head.user_id)))
+        if user.is_some?
+          session[:user_id] = user.get.head.id
+          halt 200, j(user.get.head.get_hash)
+        else
+          halt 401, j(status: 'unauthorised', message: 'Invalid user')
+        end
+      else
+        # create new user from social details
+        user = Users.create(info[:email], uid, uid)
+        if user.is_valid?
+          u = Users.find(where(email: equals(info[:email])))
+          Identities.create(u.get.head.id, provider, uid)
+          session[:user_id] = u.get.head.id
+          halt 200, j(u.get.head.get_hash)
+        else
+          halt 401, j(status: 'unauthorised', message: 'Not logged in')
+        end
+      end
+    end
   end
 
   get '/auth/twitter/callback' do

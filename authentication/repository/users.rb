@@ -8,8 +8,21 @@ class Users
 
   def self.create(email, password, password_confirmation)
     encrypted_user = encrypt_record(email, password)
-    v = validate(email, password, password_confirmation)
+    v = validate_on_create(email, password, password_confirmation)
     Repository.instance.records.add(User.def, sequence(encrypted_user)) if v.is_valid?
+    v
+  end
+
+  def self.update(user_id,email, password, password_confirmation)
+    v = validate_on_update(email, password, password_confirmation)
+    if email.is_some?
+      Repository.instance.records.set(User.def, where(id: equals(user_id)), keyword(:email), email.get) if v.is_valid?
+    end
+    if password.is_some?
+      crypted = encrypt_password(password.get)
+      Repository.instance.records.set(User.def, where(id: equals(user_id)), keyword(:password_hash), crypted[:password_hash],
+      keyword(:password_salt), crypted[:password_salt]) if v.is_valid?
+    end
     v
   end
 
@@ -24,17 +37,34 @@ class Users
   private
 
   def self.encrypt_record(email, password)
+    crypted = encrypt_password(password)
+    User.new(email, 'first', 'last', crypted[:password_hash], crypted[:password_salt])
+  end
+
+  def self.encrypt_password(password)
     password_salt = BCrypt::Engine.generate_salt
-    password_hash = BCrypt::Engine.hash_secret(password, password_salt)
-    User.new(email, 'first', 'last', password_hash, password_salt)
+    {password_salt: password_salt, password_hash: BCrypt::Engine.hash_secret(password, password_salt)}
   end
 
 
-  def self.validate(email, password, password_confirmation)
+  def self.validate_on_create(email, password, password_confirmation)
     v = Validations.new
     v.add_validation Validations.not_empty?(email: email, password: password, password_confirmation: password_confirmation)
-    v.add_validation Validations.has_uniqueness?(Users,email: email)
+    v.add_validation Validations.has_uniqueness?(Users, email: email)
     v.add_validation Validations.field_values_match?(:password, :password_confirmation, password, password_confirmation, 'Password and Password Confirmation must match!')
+    v
+  end
+
+  def self.validate_on_update(email, password, password_confirmation)
+    v = Validations.new
+    if email.is_some?
+      v.add_validation Validations.not_empty?(email: email.get)
+      v.add_validation Validations.has_uniqueness?(Users, email: email.get)
+    end
+    if password.is_some?
+      v.add_validation Validations.not_empty?(password: password.get, password_confirmation: password_confirmation.get_or_else(''))
+      v.add_validation Validations.field_values_match?(:password, :password_confirmation, password.get, password_confirmation.get_or_else(''), 'Password and Password Confirmation must match!')
+    end
     v
   end
 
