@@ -2,15 +2,32 @@ require 'totally_lazy'
 require 'lazy_records'
 require 'sinatra/base'
 require 'oj'
+require 'encrypted_cookie'
+require 'rack/csrf'
 require_relative 'providers/facebook'
 require_relative 'providers/twitter'
 require_relative 'repository/users'
 require_relative 'repository/identities'
+require_relative 'repository/sessions'
+require_relative 'util/utils'
 
 class AuthenticationApp < Sinatra::Application
 
   enable :sessions
-  set :session_secret, 'super secret'
+  set :session_secret, 'e60bef57fddde8683fa6376252087472b4b5be170909c50cbb5201fde1688a37'
+
+  # cookie_settings = {
+  #     :key => 'rack.session',
+  #     :path => '/',
+  #     :expire_after => 86400, # In seconds, 1 day.
+  #     :secret => 'e60bef57fddde8683fa6376252087472b4b5be170909c50cbb5201fde1688a37',
+  #     :secure => true,
+  #     :httponly => true
+  # }
+  # AES encryption of session cookies
+  # use Rack::Session::EncryptedCookie, cookie_settings
+  # use Rack::Session::Cookie, cookie_settings
+  # use Rack::Csrf, raise: true
 
   use OmniAuth::Builder do
     provider :facebook, '780005678689514', '983ad6fed1974d2ca64924659e218dac'
@@ -68,8 +85,10 @@ class AuthenticationApp < Sinatra::Application
 
       user = Users.find(where(email: equals(email)))
       if user.is_some? && user.get.head.password_hash == BCrypt::Engine.hash_secret(password, user.get.head.password_salt)
-        session[:user_id] = user.get.head.id
-        halt 200, j(user.get.head.get_hash)
+        # session[:user_id] = user.get.head.id
+        session[:user_session] = Utils.generate_session_id
+        Sessions.create(user.get.head.id, session[:user_session], Time.now.to_i)
+        halt 200, j(for_user(user.get.head.get_hash))
       else
         halt 401, j(status: 'unauthorised', message: 'Invalid email or password')
       end
@@ -77,29 +96,46 @@ class AuthenticationApp < Sinatra::Application
   end
 
   get '/whoami' do
-    user = Users.find(where(id: equals(session[:user_id])))
+    error_if_not_logged_in
+    user = find_user
     if user.is_some?
-      halt 200, j(user.get.head.get_hash)
+      halt 200, j(for_user(user.get.head))
     else
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
     end
   end
 
   get '/signout' do
-    user = Users.find(where(id: equals(session[:user_id])))
+    error_if_not_logged_in
+    user = find_user
     if user.is_some?
-      session[:user_id] = nil
+      # session[:user_id] = nil
+      Sessions.remove(where(session_id: equals(session[:user_session])))
       halt 200, j(status: 'logged out')
     else
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
     end
   end
 
+  def find_session
+    Sessions.find(where(session_id: equals(session[:user_session])))
+  end
+
+  def find_user
+    user_session = find_session
+    if user_session.is_some?
+      user = Users.find(where(id: equals(user_session.get.head.user_id)))
+      user.is_some? ? user : none
+    else
+      none
+    end
+  end
+
   post '/update' do
-    user = Users.find(where(id: equals(session[:user_id])))
+    error_if_not_logged_in
+    user = find_user
     if user.is_some?
-       p option(params[:email])
-      u = Users.update(user.get.head.id,option(params[:email]),option(params[:password]),option(params[:password_confirmation]))
+      u = Users.update(user.get.head.id, option(params[:email]), option(params[:password]), option(params[:password_confirmation]))
       u.is_valid? ? halt(201, j(status: 'success')) : j(errors: u.errors)
     else
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
@@ -107,7 +143,8 @@ class AuthenticationApp < Sinatra::Application
   end
 
   get '/destroy' do
-    user = Users.find(where(id: equals(session[:user_id])))
+    error_if_not_logged_in
+    user = find_user
     if user.is_some?
       halt 200, j(status: 'not implemented yet!')
     else
@@ -115,8 +152,31 @@ class AuthenticationApp < Sinatra::Application
     end
   end
 
+  get '/identities' do
+    error_if_not_logged_in
+    user = find_user
+    if user.is_some?
+      identities = Identities.find(where(id: equals(user.get.head.id)))
+      halt 200, j(identities: identities.get_or_else([]))
+    else
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    end
+  end
+
+  get '/sessions' do
+    error_if_not_logged_in
+    user = find_user
+    if user.is_some?
+      sessions = Sessions.all
+      # sessions = Sessions.find(where(id: equals(user.get.head.id)))
+      halt 200, j(sessions: sessions.entries, current_session: session[:user_session])
+    else
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    end
+  end
+
   get '/auth/facebook/callback' do
-    if already_logged_in?   # TODO - remove this and if already logged in then just add facebook to the identities for this user but dont try to login again with it
+    if already_logged_in? # TODO - remove this and if already logged in then just add facebook to the identities for this user but dont try to login again with it
       halt(401, j(status: 'error', message: 'Already logged in'))
     else
       info = Facebook.info(request.env['omniauth.auth'])
@@ -125,7 +185,7 @@ class AuthenticationApp < Sinatra::Application
       identity = Identities.find(where(provider: equals(provider), uid: equals(uid)))
       if identity.is_some?
         # login with existing user
-        user = Users.find(where(id: equals(identity.get.head.user_id)))
+        user = find_user
         if user.is_some?
           session[:user_id] = user.get.head.id
           halt 200, j(user.get.head.get_hash)
@@ -154,7 +214,21 @@ class AuthenticationApp < Sinatra::Application
   private
 
   def already_logged_in?
-    !session[:user_id].nil?
+    # !session[:user_id].nil?
+    Sessions.find(where(session_id: equals(session[:user_session]))).is_some?
+  end
+
+  def error_if_not_logged_in
+    halt 401, j(status: 'unauthorised', message: 'Not logged in') unless already_logged_in?
+  end
+
+  def for_user(u)
+    p u.inspect
+    h = u.get_hash
+    {id: h[:id],
+     email: h[:email],
+     token: h[:sessions]
+    }
   end
 
   def j(v)

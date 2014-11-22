@@ -38,7 +38,7 @@ class Users
 
   def self.encrypt_record(email, password)
     crypted = encrypt_password(password)
-    User.new(email, 'first', 'last', crypted[:password_hash], crypted[:password_salt])
+    User.new(email, crypted[:password_hash], crypted[:password_salt])
   end
 
   def self.encrypt_password(password)
