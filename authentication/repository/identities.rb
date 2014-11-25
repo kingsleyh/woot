@@ -12,6 +12,10 @@ class Identities
     option(Repository.instance.records.get(Identity.def, selection))
   end
 
+  def self.remove(selection=nil)
+    Repository.instance.records.remove(Identity.def, selection)
+  end
+
   def self.all
     Repository.instance.records.get(Identity.def)
   end

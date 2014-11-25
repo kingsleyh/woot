@@ -23,6 +23,9 @@ ActiveRecord::Schema.define(:version => 20141118211450) do
     t.string "user_id"
     t.string "session_id"
     t.string "start_time"
+    t.string "ip_address"
+    t.string "user_agent"
+    t.string "login_method"
   end
 
   create_table "users", :force => true do |t|

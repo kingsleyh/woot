@@ -73,9 +73,37 @@ class AuthenticationApp < Sinatra::Application
     html
   end
 
+  get '/identities/remove' do
+    <<-html
+      <form method="post" action="/auth/identities">
+      provider:<input type="text" name="provider" id="provider">
+       <input type="submit" value="Remove">
+      </form>
+    html
+  end
+
+  get '/sessions/remove' do
+    <<-html
+      <form method="post" action="/auth/sessions">
+      session_id:<input type="text" name="session_id" id="session_id">
+       <input type="submit" value="Remove">
+      </form>
+    html
+  end
+
   post '/signup' do
-    user = Users.create(params[:email], params[:password], params[:password_confirmation])
-    user.is_valid? ? halt(201, j(status: 'success')) : j(errors: user.errors)
+    u = Users.create(params[:email], params[:password], params[:password_confirmation])
+    # user.is_valid? ? halt(201, j(status: 'success')) : j(errors: user.errors)
+    if u.is_valid?
+      user = Users.find(where(email: equals(params[:email])))
+      session[:user_session] = Utils.generate_session_id
+      ip_address = option(request.ip).get_or_else('')
+      user_agent = option(request.user_agent).get_or_else('')
+      Sessions.create(user.get.head.id, session[:user_session], Time.now.to_i, ip_address, user_agent, 'form')
+      halt 200, j(for_user(UserDetail.new(user.get.head.id)))
+    else
+      halt(201, j(status: 'error', errors: u.errors))
+    end
   end
 
   post '/signin' do
@@ -87,9 +115,10 @@ class AuthenticationApp < Sinatra::Application
 
       user = Users.find(where(email: equals(email)))
       if user.is_some? && user.get.head.password_hash == BCrypt::Engine.hash_secret(password, user.get.head.password_salt)
-        # session[:user_id] = user.get.head.id
         session[:user_session] = Utils.generate_session_id
-        Sessions.create(user.get.head.id, session[:user_session], Time.now.to_i)
+        ip_address = option(request.ip).get_or_else('')
+        user_agent = option(request.user_agent).get_or_else('')
+        Sessions.create(user.get.head.id, session[:user_session], Time.now.to_i, ip_address, user_agent, 'form')
         halt 200, j(for_user(UserDetail.new(user.get.head.id)))
       else
         halt 401, j(status: 'unauthorised', message: 'Invalid email or password')
@@ -118,21 +147,9 @@ class AuthenticationApp < Sinatra::Application
     end
   end
 
-  # def find_session
-  #   Sessions.find(where(session_id: equals(session[:user_session])))
-  # end
-
   def find_user
     user_session = Sessions.find(where(session_id: equals(session[:user_session])))
     user_session.is_some? ? UserDetail.new(user_session.get.head.user_id) : empty
-
-    # user_session = find_session
-    # if user_session.is_some?
-    #   user = Users.find(where(id: equals(user_session.get.head.user_id)))
-    #   user.is_some? ? user : none
-    # else
-    #   none
-    # end
   end
 
   post '/update' do
@@ -142,7 +159,7 @@ class AuthenticationApp < Sinatra::Application
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
     else
       u = Users.update(user.head.id, option(params[:email]), option(params[:password]), option(params[:password_confirmation]))
-      u.is_valid? ? halt(201, j(status: 'success')) : j(errors: u.errors)
+      u.is_valid? ? halt(201, j(status: 'success', message: 'updated user')) : halt(401, j(status: 'error', errors: u.errors))
     end
   end
 
@@ -160,7 +177,7 @@ class AuthenticationApp < Sinatra::Application
     if user_detail.user.empty?
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
     else
-      halt 200, j(identities: user_detail.identities.entries)
+      halt 200, j(identities: user_detail.identities.map { |i| i.provider }.entries)
     end
   end
 
@@ -170,44 +187,53 @@ class AuthenticationApp < Sinatra::Application
     if user_detail.user.empty?
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
     else
-      halt 200, j(sessions: user_detail.sessions.entries, current_session: session[:user_session])
+      halt 200, j(sessions: user_detail.sessions.map { |s| {session_id: s.session_id,
+                                                            start_time: Time.at(s.start_time.to_i).to_s,
+                                                            ip_address: s.ip_address,
+                                                            user_agent: s.user_agent,
+                                                            login_method: s.login_method} }.entries,
+                  current_session: session[:user_session])
     end
   end
 
-  get '/auth/facebook/callback' do
-    if already_logged_in? # TODO - remove this and if already logged in then just add facebook to the identities for this user but dont try to login again with it
-      halt(401, j(status: 'error', message: 'Already logged in'))
+  post '/identities' do
+    error_if_not_logged_in
+    user = find_user.user
+    provider = params[:provider]
+    if user.empty?
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
     else
-      info = Facebook.info(request.env['omniauth.auth'])
-      provider = info[:provider]
-      uid = info[:uid]
-      identity = Identities.find(where(provider: equals(provider), uid: equals(uid)))
-      if identity.is_some?
-        # login with existing user
-        user = find_user.user
-        if user.empty?
-          halt 401, j(status: 'unauthorised', message: 'Invalid user')
-        else
-          session[:user_id] = user.head.id
-          halt 200, j(user.head.get_hash)
-        end
+      if Identities.find(where(provider: equals(provider), user_id: equals(user.head.id))).is_some?
+        Identities.remove(where(provider: equals(provider)))
+        Identities.find(where(provider: equals(provider), user_id: equals(user.head.id))).is_none? ? halt(201, j(status: 'success')) : halt(401, j(errors: 'Could not remove identity for provier: ' + provider))
       else
-        # create new user from social details
-        user = Users.create(info[:email], uid, uid)
-        if user.is_valid?
-          u = Users.find(where(email: equals(info[:email])))
-          Identities.create(u.get.head.id, provider, uid)
-          session[:user_id] = u.get.head.id
-          halt 200, j(u.get.head.get_hash)
-        else
-          halt 401, j(status: 'unauthorised', message: 'Not logged in')
-        end
+        halt(401, j(status: 'error', message: 'unknown provider: ' + provider))
       end
     end
   end
 
+  post '/sessions' do
+    error_if_not_logged_in
+    user = find_user.user
+    session_id = params[:session_id]
+    if user.empty?
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    else
+      if Sessions.find(where(session_id: equals(session_id), user_id: equals(user.head.id))).is_some?
+        Sessions.remove(where(session_id: equals(session_id)))
+        Sessions.find(where(session_id: equals(session_id), user_id: equals(user.head.id))).is_none? ? halt(201, j(status: 'success')) : halt(401, j(errors: 'Could not remove session with session id: ' + session_id))
+      else
+        halt(401, j(status: 'error', message: 'unknown session id: ' + session_id))
+      end
+    end
+  end
+
+  get '/auth/facebook/callback' do
+    add_social_login(Facebook.info(request.env['omniauth.auth']))
+  end
+
   get '/auth/twitter/callback' do
-    Twitter.info(request.env['omniauth.auth'])
+    add_social_login(Twitter.info(request.env['omniauth.auth']))
   end
 
   private
@@ -225,8 +251,11 @@ class AuthenticationApp < Sinatra::Application
     {id: h[:id],
      email: h[:email],
      session_id: ud.current_session(session[:user_session]),
-     sessions: ud.sessions.map{|s| {session_id:s.session_id,start_time:Time.at(s.start_time.to_i).to_s}}.entries,
-     identities: ud.identities.map{|i| i.provider }.entries
+     sessions: ud.sessions.map { |s| {session_id: s.session_id, start_time: Time.at(s.start_time.to_i).to_s,
+                                      ip_address: s.ip_address,
+                                      user_agent: s.user_agent,
+                                      login_method: s.login_method} }.entries,
+     identities: ud.identities.map { |i| i.provider }.entries
     }
   end
 
@@ -234,5 +263,65 @@ class AuthenticationApp < Sinatra::Application
     Oj.dump(v)
   end
 
+  def add_social_login(info)
+    if already_logged_in?
+      add_provider(info)
+    else
+      identity, provider, uid = find_existing_identity(info)
+      if identity.is_some?
+        login_existing_user(identity, provider)
+      else
+        create_identity(info, provider, uid)
+      end
+    end
+  end
+
+  def add_provider(info)
+    provider = info[:provider]
+    uid = info[:uid]
+    identity = Identities.find(where(provider: equals(provider), uid: equals(uid)))
+    if identity.is_none?
+      user = find_user.user
+      Identities.create(user.head.id, provider, uid)
+      halt(201, j(status: 'success', message: 'added ' + provider))
+    else
+      halt(401, j(status: 'error', message: 'The provider ' + provider + ' is already linked to an account'))
+    end
+  end
+
+  def login_existing_user(identity, provider)
+    user = Users.find(where(id: equals(identity.get.head.user_id)))
+    if user.is_none?
+      halt 401, j(status: 'unauthorised', message: 'Invalid user')
+    else
+      session[:user_session] = Utils.generate_session_id
+      ip_address = option(request.ip).get_or_else('')
+      user_agent = option(request.user_agent).get_or_else('')
+      Sessions.create(user.get.head.id, session[:user_session], Time.now.to_i, ip_address, user_agent, provider)
+      halt 200, j(for_user(UserDetail.new(user.get.head.id)))
+    end
+  end
+
+  def find_existing_identity(info)
+    provider = info[:provider]
+    uid = info[:uid]
+    identity = Identities.find(where(provider: equals(provider), uid: equals(uid)))
+    return identity, provider, uid
+  end
+
+  def create_identity(info, provider, uid)
+    user = Users.create(info[:email], uid, uid)
+    if user.is_valid?
+      u = Users.find(where(email: equals(info[:email])))
+      Identities.create(u.get.head.id, provider, uid)
+      session[:user_session] = Utils.generate_session_id
+      ip_address = option(request.ip).get_or_else('')
+      user_agent = option(request.user_agent).get_or_else('')
+      Sessions.create(user.get.head.id, session[:user_session], Time.now.to_i, ip_address, user_agent, provider)
+      halt 200, j(for_user(UserDetail.new(user.get.head.id)))
+    else
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    end
+  end
 
 end
