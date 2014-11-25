@@ -9,6 +9,8 @@ require_relative 'providers/twitter'
 require_relative 'repository/users'
 require_relative 'repository/identities'
 require_relative 'repository/sessions'
+require_relative 'model/aggregates/session_detail'
+require_relative 'model/aggregates/user_detail'
 require_relative 'util/utils'
 
 class AuthenticationApp < Sinatra::Application
@@ -88,7 +90,7 @@ class AuthenticationApp < Sinatra::Application
         # session[:user_id] = user.get.head.id
         session[:user_session] = Utils.generate_session_id
         Sessions.create(user.get.head.id, session[:user_session], Time.now.to_i)
-        halt 200, j(for_user(user.get.head.get_hash))
+        halt 200, j(for_user(UserDetail.new(user.get.head.id)))
       else
         halt 401, j(status: 'unauthorised', message: 'Invalid email or password')
       end
@@ -97,81 +99,78 @@ class AuthenticationApp < Sinatra::Application
 
   get '/whoami' do
     error_if_not_logged_in
-    user = find_user
-    if user.is_some?
-      halt 200, j(for_user(user.get.head))
-    else
+    user_detail = find_user
+    if user_detail.user.empty?
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    else
+      halt 200, j(for_user(user_detail))
     end
   end
 
   get '/signout' do
     error_if_not_logged_in
-    user = find_user
-    if user.is_some?
-      # session[:user_id] = nil
+    user = find_user.user
+    if user.empty?
+      halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    else
       Sessions.remove(where(session_id: equals(session[:user_session])))
       halt 200, j(status: 'logged out')
-    else
-      halt 401, j(status: 'unauthorised', message: 'Not logged in')
     end
   end
 
-  def find_session
-    Sessions.find(where(session_id: equals(session[:user_session])))
-  end
+  # def find_session
+  #   Sessions.find(where(session_id: equals(session[:user_session])))
+  # end
 
   def find_user
-    user_session = find_session
-    if user_session.is_some?
-      user = Users.find(where(id: equals(user_session.get.head.user_id)))
-      user.is_some? ? user : none
-    else
-      none
-    end
+    user_session = Sessions.find(where(session_id: equals(session[:user_session])))
+    user_session.is_some? ? UserDetail.new(user_session.get.head.user_id) : empty
+
+    # user_session = find_session
+    # if user_session.is_some?
+    #   user = Users.find(where(id: equals(user_session.get.head.user_id)))
+    #   user.is_some? ? user : none
+    # else
+    #   none
+    # end
   end
 
   post '/update' do
     error_if_not_logged_in
-    user = find_user
-    if user.is_some?
-      u = Users.update(user.get.head.id, option(params[:email]), option(params[:password]), option(params[:password_confirmation]))
-      u.is_valid? ? halt(201, j(status: 'success')) : j(errors: u.errors)
-    else
+    user = find_user.user
+    if user.empty?
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    else
+      u = Users.update(user.head.id, option(params[:email]), option(params[:password]), option(params[:password_confirmation]))
+      u.is_valid? ? halt(201, j(status: 'success')) : j(errors: u.errors)
     end
   end
 
   get '/destroy' do
     error_if_not_logged_in
-    user = find_user
-    if user.is_some?
-      halt 200, j(status: 'not implemented yet!')
-    else
-      halt 401, j(status: 'unauthorised', message: 'Not logged in')
-    end
+    user = find_user.user
+    user.empty? ?
+        halt(401, j(status: 'unauthorised', message: 'Not logged in')) :
+        halt(200, j(status: 'not implemented yet!'))
   end
 
   get '/identities' do
     error_if_not_logged_in
-    user = find_user
-    if user.is_some?
-      identities = Identities.find(where(id: equals(user.get.head.id)))
-      halt 200, j(identities: identities.get_or_else([]))
-    else
+    user_detail = find_user
+    if user_detail.user.empty?
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    else
+      halt 200, j(identities: user_detail.identities.entries)
     end
   end
 
   get '/sessions' do
     error_if_not_logged_in
-    user = find_user
-    if user.is_some?
-      sessions = Sessions.all
-      # sessions = Sessions.find(where(id: equals(user.get.head.id)))
-      halt 200, j(sessions: sessions.entries, current_session: session[:user_session])
-    else
+    user_detail = find_user
+    if user_detail.user.empty?
       halt 401, j(status: 'unauthorised', message: 'Not logged in')
+    else
+      halt 200, j(sessions: user_detail.sessions.entries, current_session: session[:user_session])
     end
   end
 
@@ -185,12 +184,12 @@ class AuthenticationApp < Sinatra::Application
       identity = Identities.find(where(provider: equals(provider), uid: equals(uid)))
       if identity.is_some?
         # login with existing user
-        user = find_user
-        if user.is_some?
-          session[:user_id] = user.get.head.id
-          halt 200, j(user.get.head.get_hash)
-        else
+        user = find_user.user
+        if user.empty?
           halt 401, j(status: 'unauthorised', message: 'Invalid user')
+        else
+          session[:user_id] = user.head.id
+          halt 200, j(user.head.get_hash)
         end
       else
         # create new user from social details
@@ -214,7 +213,6 @@ class AuthenticationApp < Sinatra::Application
   private
 
   def already_logged_in?
-    # !session[:user_id].nil?
     Sessions.find(where(session_id: equals(session[:user_session]))).is_some?
   end
 
@@ -222,12 +220,13 @@ class AuthenticationApp < Sinatra::Application
     halt 401, j(status: 'unauthorised', message: 'Not logged in') unless already_logged_in?
   end
 
-  def for_user(u)
-    p u.inspect
-    h = u.get_hash
+  def for_user(ud)
+    h = ud.user.head.get_hash
     {id: h[:id],
      email: h[:email],
-     token: h[:sessions]
+     session_id: ud.current_session(session[:user_session]),
+     sessions: ud.sessions.map{|s| {session_id:s.session_id,start_time:Time.at(s.start_time.to_i).to_s}}.entries,
+     identities: ud.identities.map{|i| i.provider }.entries
     }
   end
 
